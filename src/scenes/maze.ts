@@ -83,6 +83,8 @@ export class MazeScene implements Scene {
   private npcs: NPC[] = [];
   private gameOver = false;
   private canvas: HTMLCanvasElement | null = null;
+  private mouseTarget: { x: number; y: number } | null = null;
+  private isMouseDown = false;
 
   async create(ctx: CanvasRenderingContext2D): Promise<void> {
     this.canvas = ctx.canvas;
@@ -97,19 +99,70 @@ export class MazeScene implements Scene {
   private setupInput(): void {
     window.addEventListener("keydown", (e) => {
       this.keys.add(e.key);
+      // Space to restart when game over
+      if (e.key === " " && this.gameOver) {
+        this.restartGame();
+      }
     });
     window.addEventListener("keyup", (e) => {
       this.keys.delete(e.key);
     });
 
-    // Click/tap to restart when game over
-    const handleRestart = () => {
+    // Mouse/touch input for movement and restart
+    const getWorldPos = (clientX: number, clientY: number) => {
+      if (!this.canvas) return null;
+      const rect = this.canvas.getBoundingClientRect();
+      const screenX = clientX - rect.left;
+      const screenY = clientY - rect.top;
+      return {
+        x: screenX + this.cameraX,
+        y: screenY + this.cameraY,
+      };
+    };
+
+    // Mouse events
+    this.canvas?.addEventListener("mousedown", (e) => {
       if (this.gameOver) {
         this.restartGame();
+        return;
       }
-    };
-    this.canvas?.addEventListener("click", handleRestart);
-    this.canvas?.addEventListener("touchstart", handleRestart);
+      this.isMouseDown = true;
+      this.mouseTarget = getWorldPos(e.clientX, e.clientY);
+    });
+
+    this.canvas?.addEventListener("mousemove", (e) => {
+      if (this.isMouseDown && !this.gameOver) {
+        this.mouseTarget = getWorldPos(e.clientX, e.clientY);
+      }
+    });
+
+    window.addEventListener("mouseup", () => {
+      this.isMouseDown = false;
+    });
+
+    // Touch events
+    this.canvas?.addEventListener("touchstart", (e) => {
+      if (this.gameOver) {
+        this.restartGame();
+        return;
+      }
+      e.preventDefault();
+      const touch = e.touches[0];
+      this.isMouseDown = true;
+      this.mouseTarget = getWorldPos(touch.clientX, touch.clientY);
+    });
+
+    this.canvas?.addEventListener("touchmove", (e) => {
+      if (this.isMouseDown && !this.gameOver) {
+        e.preventDefault();
+        const touch = e.touches[0];
+        this.mouseTarget = getWorldPos(touch.clientX, touch.clientY);
+      }
+    });
+
+    window.addEventListener("touchend", () => {
+      this.isMouseDown = false;
+    });
   }
 
   private restartGame(): void {
@@ -431,6 +484,18 @@ export class MazeScene implements Scene {
       }
       if (this.keys.has("ArrowDown")) {
         newY += PLAYER_SPEED;
+      }
+
+      // Mouse/touch movement - move toward target while held
+      if (this.mouseTarget && this.isMouseDown) {
+        const dx = this.mouseTarget.x - (this.player.x + this.player.width / 2);
+        const dy = this.mouseTarget.y - (this.player.y + this.player.height / 2);
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist > 10) { // dead zone to prevent jitter
+          newX = this.player.x + (dx / dist) * PLAYER_SPEED;
+          newY = this.player.y + (dy / dist) * PLAYER_SPEED;
+        }
       }
 
       // Check collision and update position
