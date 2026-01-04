@@ -23,13 +23,16 @@ const MAX_WALL_LENGTH = 5;
 const NUM_DETACHED_WALLS = 6; // Free-standing walls (in addition to the intersecting pair)
 const MAX_PLACEMENT_ATTEMPTS = 200; // Max iterations to place all walls
 
-// Player sprite config (120x120 per frame, extensible for animation)
+// Player sprite config (120x120 per frame, 2 frames for animation)
 const PLAYER_FRAME_SIZE = 120;
-const PLAYER_FRAMES = 1;
+const PLAYER_FRAMES = 2;
 const PLAYER_SPEED = 8;
+const PLAYER_ANIM_FPS = 4;
 
 // NPC config
 const NPC_SIZE = 120;
+const NPC_FRAMES = 2;
+const NPC_ANIM_FPS = 4;
 
 // Hitbox is 80x80 centered in the 120x120 sprite
 const HITBOX_SIZE = 80;
@@ -64,6 +67,9 @@ interface NPC {
   stuckTime: number;
   prevX: number;
   prevY: number;
+  // Animation state
+  frame: number;
+  lastAnimTime: number;
 }
 
 export class MazeScene implements Scene {
@@ -91,6 +97,7 @@ export class MazeScene implements Scene {
   private score = 0;
   private highScore = 0;
   private level = 1;
+  private lastAnimTime = 0;
 
   async create(ctx: CanvasRenderingContext2D): Promise<void> {
     this.canvas = ctx.canvas;
@@ -251,9 +258,9 @@ export class MazeScene implements Scene {
     [this.grassImg, this.bushesImg, this.foxImg, this.dogImg, this.chickImg, this.chickBonesImg, this.titleImg] = await Promise.all([
       this.loadImage("/assets/plain_grass.png"),
       this.loadImage("/assets/bushes.png"),
-      this.loadImage("/assets/test-fox.png"),
-      this.loadImage("/assets/test-dog.png"),
-      this.loadImage("/assets/test-chick.png"),
+      this.loadImage("/assets/fox-sprite.png"),
+      this.loadImage("/assets/dog-sprite.png"),
+      this.loadImage("/assets/chick-sprite.png"),
       this.loadImage("/assets/chick-bones.png"),
       this.loadImage("/assets/title.png"),
     ]);
@@ -267,6 +274,10 @@ export class MazeScene implements Scene {
     // Player size (120x120 per frame)
     this.player.width = PLAYER_FRAME_SIZE;
     this.player.height = PLAYER_FRAME_SIZE;
+
+    // Pick random starting animation frame
+    this.player.frame = Math.floor(Math.random() * PLAYER_FRAMES);
+    this.lastAnimTime = performance.now();
 
     // Randomly choose left or right side
     this.playerOnLeft = Math.random() < 0.5;
@@ -353,7 +364,7 @@ export class MazeScene implements Scene {
       }
       if (overlapsNPC) continue;
 
-      // Place NPC with AI state
+      // Place NPC with AI state and random starting frame
       this.npcs.push({
         x,
         y,
@@ -367,6 +378,8 @@ export class MazeScene implements Scene {
         stuckTime: 0,
         prevX: x,
         prevY: y,
+        frame: Math.floor(Math.random() * NPC_FRAMES),
+        lastAnimTime: performance.now(),
       });
       break;
     }
@@ -682,6 +695,23 @@ export class MazeScene implements Scene {
 
     if (!this.mapCanvas) return;
 
+    // Update player animation
+    const now = performance.now();
+    const animInterval = 1000 / PLAYER_ANIM_FPS;
+    if (now - this.lastAnimTime >= animInterval) {
+      this.player.frame = (this.player.frame + 1) % PLAYER_FRAMES;
+      this.lastAnimTime = now;
+    }
+
+    // Update NPC animations
+    const npcAnimInterval = 1000 / NPC_ANIM_FPS;
+    for (const npc of this.npcs) {
+      if (!npc.dead && now - npc.lastAnimTime >= npcAnimInterval) {
+        npc.frame = (npc.frame + 1) % NPC_FRAMES;
+        npc.lastAnimTime = now;
+      }
+    }
+
     // Only update game logic if not game over or level complete
     if (!this.gameOver && !this.levelComplete) {
       // Handle player movement
@@ -784,7 +814,7 @@ export class MazeScene implements Scene {
     ctx.shadowBlur = 0;
 
     // Collect all sprites for y-sorted rendering (bushes, bones, player, NPCs)
-    const sprites: { type: 'bush' | 'bone' | 'sprite'; img: ImageBitmap; x: number; y: number; tileIndex?: number }[] = [];
+    const sprites: { type: 'bush' | 'bone' | 'player' | 'npc'; img: ImageBitmap; x: number; y: number; tileIndex?: number; frame?: number }[] = [];
 
     // Add bushes
     if (this.bushesImg) {
@@ -806,15 +836,15 @@ export class MazeScene implements Scene {
 
     // Add player
     if (this.foxImg) {
-      sprites.push({ type: 'sprite', img: this.foxImg, x: this.player.x, y: this.player.y });
+      sprites.push({ type: 'player', img: this.foxImg, x: this.player.x, y: this.player.y });
     }
 
-    // Add NPCs (bones for dead, sprites for live)
+    // Add NPCs (bones for dead, animated sprites for live)
     for (const npc of this.npcs) {
       if (npc.dead) {
         sprites.push({ type: 'bone', img: npc.img, x: npc.x, y: npc.y });
       } else {
-        sprites.push({ type: 'sprite', img: npc.img, x: npc.x, y: npc.y });
+        sprites.push({ type: 'npc', img: npc.img, x: npc.x, y: npc.y, frame: npc.frame });
       }
     }
 
@@ -831,6 +861,37 @@ export class MazeScene implements Scene {
           sprite.tileIndex * TILE_SIZE, 0, TILE_SIZE, TILE_SIZE,
           screenX, screenY, TILE_SIZE, TILE_SIZE
         );
+      } else if (sprite.type === 'player') {
+        // Draw shadow ellipse at feet (lower for fox)
+        ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
+        ctx.beginPath();
+        ctx.ellipse(screenX + 60, screenY + TILE_SIZE - 10, 22, 8, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // Draw player with current animation frame
+        ctx.drawImage(
+          sprite.img,
+          this.player.frame * PLAYER_FRAME_SIZE, 0, PLAYER_FRAME_SIZE, PLAYER_FRAME_SIZE,
+          screenX, screenY, TILE_SIZE, TILE_SIZE
+        );
+      } else if (sprite.type === 'npc' && sprite.frame !== undefined) {
+        // Draw shadow ellipse at feet
+        ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
+        ctx.beginPath();
+        ctx.ellipse(screenX + 60, screenY + TILE_SIZE - 15, 22, 8, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // Draw NPC with current animation frame
+        ctx.drawImage(
+          sprite.img,
+          sprite.frame * NPC_SIZE, 0, NPC_SIZE, NPC_SIZE,
+          screenX, screenY, TILE_SIZE, TILE_SIZE
+        );
+      } else if (sprite.type === 'bone') {
+        // Draw wider shadow ellipse under bones
+        ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
+        ctx.beginPath();
+        ctx.ellipse(screenX + 60, screenY + TILE_SIZE - 24, 55, 10, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.drawImage(sprite.img, screenX, screenY, TILE_SIZE, TILE_SIZE);
       } else {
         ctx.drawImage(sprite.img, screenX, screenY, TILE_SIZE, TILE_SIZE);
       }
