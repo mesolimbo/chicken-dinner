@@ -152,7 +152,8 @@ export class MazeScene implements Scene {
 
   private setupInput(): void {
     // Document-level touch handler for better mobile audio support
-    document.addEventListener("touchstart", (e) => {
+    // Using touchend instead of touchstart for reliable audio playback on mobile
+    document.addEventListener("touchend", (e) => {
       if (!this.gameStarted) {
         this.startGame();
         e.preventDefault();
@@ -220,9 +221,21 @@ export class MazeScene implements Scene {
       this.isMouseDown = false;
     });
 
-    // Touch events
+    // Touch events - use touchstart for movement (low latency), touchend for game state changes (reliable audio)
     this.canvas?.addEventListener("touchstart", (e) => {
       e.preventDefault(); // Prevent default touch behavior
+      // Don't handle game state changes here - let touchend handle them for reliable audio
+      if (!this.gameStarted || this.gameOver || this.levelComplete) {
+        return;
+      }
+      const touch = e.touches[0];
+      this.isMouseDown = true;
+      this.mouseTarget = getWorldPos(touch.clientX, touch.clientY);
+    });
+
+    // Use touchend for game state changes - more reliable for audio playback on mobile
+    this.canvas?.addEventListener("touchend", (e) => {
+      e.preventDefault();
       if (!this.gameStarted) {
         this.startGame();
         return;
@@ -235,9 +248,6 @@ export class MazeScene implements Scene {
         this.nextLevel();
         return;
       }
-      const touch = e.touches[0];
-      this.isMouseDown = true;
-      this.mouseTarget = getWorldPos(touch.clientX, touch.clientY);
     });
 
     this.canvas?.addEventListener("touchmove", (e) => {
