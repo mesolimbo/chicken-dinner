@@ -41,9 +41,9 @@ const HITBOX_OFFSET = (TILE_SIZE - HITBOX_SIZE) / 2; // 20px offset
 // NPC AI speeds (pixels per frame)
 const CHICK_SPEED_WANDER = 2;
 const CHICK_SPEED_FLEE = 5;
-const DOG_SPEED_WANDER = 3;
-const DOG_SPEED_CHASE = 5;
-const DOG_CHASE_RANGE = 300; // pixels - dog only chases if within this distance
+const DOG_SPEED_WANDER = 2;
+const DOG_SPEED_CHASE = 4;
+const DOG_CHASE_RANGE = 400; // pixels - dog only chases if within this distance
 
 interface Player {
   x: number;
@@ -301,8 +301,8 @@ export class MazeScene implements Scene {
   }
 
   private getSpeedMultiplier(): number {
-    // Smooth exponential increase - 10% faster each level
-    return Math.pow(1.1, this.level - 1);
+    // Smooth exponential increase - 5% faster each level
+    return Math.pow(1.05, this.level - 1);
   }
 
   private async loadImage(src: string): Promise<ImageBitmap> {
@@ -1021,34 +1021,36 @@ export class MazeScene implements Scene {
     // Ensure proper alpha blending for sprites
     ctx.globalCompositeOperation = 'source-over';
 
-    // Draw score (below characters)
-    ctx.font = "bold 24px sans-serif";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "top";
-    const scoreText = "Score: ";
-    const scoreNum = `${this.score}`;
-    const scoreX = 12 + ctx.measureText(scoreText).width;
+    // Score drawing function (called once during y-sorted rendering)
+    const drawScore = () => {
+      ctx.font = "bold 24px sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      const scoreText = "Score: ";
+      const scoreNum = `${this.score}`;
+      const scoreX = 12 + ctx.measureText(scoreText).width;
 
-    // Set up shadow for halo effect
-    ctx.shadowColor = "rgba(0, 0, 0, 1)";
-    ctx.shadowBlur = 8;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
+      // Set up shadow for halo effect
+      ctx.shadowColor = "rgba(0, 0, 0, 1)";
+      ctx.shadowBlur = 8;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
 
-    // Draw colored text with shadow
-    ctx.fillStyle = "#ff5555";
-    ctx.fillText(scoreText, 12, 40);
-    ctx.fillStyle = "#ffffff";
-    ctx.fillText(scoreNum, scoreX, 40);
+      // Draw colored text with shadow
+      ctx.fillStyle = "#ff5555";
+      ctx.fillText(scoreText, 12, 40);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(scoreNum, scoreX, 40);
 
-    // Draw high score in smaller text below
-    ctx.font = "14px sans-serif";
-    ctx.fillStyle = "#ffffff";
-    ctx.fillText(`High Score: ${this.highScore}`, 12, 68);
+      // Draw high score in smaller text below
+      ctx.font = "14px sans-serif";
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(`High Score: ${this.highScore}`, 12, 68);
 
-    // Reset shadow
-    ctx.shadowColor = "transparent";
-    ctx.shadowBlur = 0;
+      // Reset shadow
+      ctx.shadowColor = "transparent";
+      ctx.shadowBlur = 0;
+    };
 
     // Collect all sprites for y-sorted rendering (bushes, bones, player, NPCs)
     const sprites: { type: 'bush' | 'bone' | 'player' | 'npc'; img: ImageBitmap; x: number; y: number; tileIndex?: number; frame?: number }[] = [];
@@ -1129,10 +1131,11 @@ export class MazeScene implements Scene {
         ctx.ellipse(screenX + 60, screenY + TILE_SIZE - 24, 55, 10, 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.drawImage(sprite.img, screenX, screenY, TILE_SIZE, TILE_SIZE);
-      } else {
-        ctx.drawImage(sprite.img, screenX, screenY, TILE_SIZE, TILE_SIZE);
       }
     }
+
+    // Draw score on top of all game elements
+    drawScore();
 
     // Draw game over UI
     if (this.gameOver) {
