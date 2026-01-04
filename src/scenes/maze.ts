@@ -84,6 +84,9 @@ export class MazeScene implements Scene {
   private barkSound: HTMLAudioElement | null = null;
   private introSound: HTMLAudioElement | null = null;
   private lastBarkTime = 0;
+  private scale = 1;
+  private offsetX = 0;
+  private offsetY = 0;
   private mapCanvas: OffscreenCanvas | null = null;
   private mapCtx: OffscreenCanvasRenderingContext2D | null = null;
   private wallMatrix: boolean[][] = []; // true = wall, false = grass
@@ -106,12 +109,31 @@ export class MazeScene implements Scene {
   async create(ctx: CanvasRenderingContext2D): Promise<void> {
     this.canvas = ctx.canvas;
     this.loadHighScore();
+    this.updateCanvasSize();
+    window.addEventListener("resize", () => this.updateCanvasSize());
     await this.loadAssets();
     this.generateMaze();
     this.initPlayer();
     this.initNPCs();
     this.renderMapToBuffer();
     this.setupInput();
+  }
+
+  private updateCanvasSize(): void {
+    if (!this.canvas) return;
+
+    // Set canvas to window size
+    this.canvas.width = window.innerWidth;
+    this.canvas.height = window.innerHeight;
+
+    // Calculate scale to fit viewport while preserving aspect ratio
+    const scaleX = this.canvas.width / VIEWPORT_WIDTH;
+    const scaleY = this.canvas.height / VIEWPORT_HEIGHT;
+    this.scale = Math.min(scaleX, scaleY);
+
+    // Calculate offset to center the game area
+    this.offsetX = (this.canvas.width - VIEWPORT_WIDTH * this.scale) / 2;
+    this.offsetY = (this.canvas.height - VIEWPORT_HEIGHT * this.scale) / 2;
   }
 
   private loadHighScore(): void {
@@ -150,8 +172,12 @@ export class MazeScene implements Scene {
     const getWorldPos = (clientX: number, clientY: number) => {
       if (!this.canvas) return null;
       const rect = this.canvas.getBoundingClientRect();
-      const screenX = clientX - rect.left;
-      const screenY = clientY - rect.top;
+      // Convert to canvas coordinates, then account for scale and offset
+      const canvasX = (clientX - rect.left) * (this.canvas.width / rect.width);
+      const canvasY = (clientY - rect.top) * (this.canvas.height / rect.height);
+      // Convert to game viewport coordinates
+      const screenX = (canvasX - this.offsetX) / this.scale;
+      const screenY = (canvasY - this.offsetY) / this.scale;
       return {
         x: screenX + this.cameraX,
         y: screenY + this.cameraY,
@@ -504,7 +530,6 @@ export class MazeScene implements Scene {
   }
 
   private breakOpenAt(targetRow: number, targetCol: number): void {
-    // Find an adjacent wall and shrink it to open access
     const directions = [
       { dr: -1, dc: 0 }, // up
       { dr: 1, dc: 0 },  // down
@@ -512,12 +537,12 @@ export class MazeScene implements Scene {
       { dr: 0, dc: 1 },  // right
     ];
 
+    // First, try to shrink a wall longer than MIN_WALL_LENGTH
     for (const { dr, dc } of directions) {
       const wallRow = targetRow + dr;
       const wallCol = targetCol + dc;
       if (wallRow >= 0 && wallRow < GRID_ROWS && wallCol >= 0 && wallCol < GRID_COLS) {
         if (this.wallMatrix[wallRow][wallCol]) {
-          // Check if this wall segment can be removed (wall length > MIN_WALL_LENGTH)
           const wallLength = this.getWallSegmentLength(wallRow, wallCol);
           if (wallLength > MIN_WALL_LENGTH) {
             this.wallMatrix[wallRow][wallCol] = false;
@@ -527,16 +552,126 @@ export class MazeScene implements Scene {
       }
     }
 
-    // If no wall could be shrunk, just remove any adjacent wall
+    // If all walls are length 2, try to slide one away from the enclosed area
     for (const { dr, dc } of directions) {
       const wallRow = targetRow + dr;
       const wallCol = targetCol + dc;
       if (wallRow >= 0 && wallRow < GRID_ROWS && wallCol >= 0 && wallCol < GRID_COLS) {
         if (this.wallMatrix[wallRow][wallCol]) {
-          this.wallMatrix[wallRow][wallCol] = false;
-          return;
+          const segment = this.getWallSegment(wallRow, wallCol);
+          if (segment && this.canSlideWall(segment, dr, dc)) {
+            this.slideWall(segment, dr, dc);
+            return;
+          }
         }
       }
+    }
+
+    // If no wall can be moved, delete a wall and place a new one elsewhere
+    for (const { dr, dc } of directions) {
+      const wallRow = targetRow + dr;
+      const wallCol = targetCol + dc;
+      if (wallRow >= 0 && wallRow < GRID_ROWS && wallCol >= 0 && wallCol < GRID_COLS) {
+        if (this.wallMatrix[wallRow][wallCol]) {
+          const segment = this.getWallSegment(wallRow, wallCol);
+          if (segment) {
+            // Remove this wall
+            for (const pos of segment) {
+              this.wallMatrix[pos.row][pos.col] = false;
+            }
+            // Try to place a new length-2 wall elsewhere
+            this.placeDetachedWall();
+            return;
+          }
+        }
+      }
+    }
+  }
+
+  private getWallSegment(row: number, col: number): { row: number; col: number }[] | null {
+    if (!this.wallMatrix[row][col]) return null;
+
+    const segment: { row: number; col: number }[] = [{ row, col }];
+
+    // Check if horizontal or vertical
+    const hasLeft = col > 0 && this.wallMatrix[row][col - 1];
+    const hasRight = col < GRID_COLS - 1 && this.wallMatrix[row][col + 1];
+    const hasUp = row > 0 && this.wallMatrix[row - 1][col];
+    const hasDown = row < GRID_ROWS - 1 && this.wallMatrix[row + 1][col];
+
+    const isHorizontal = hasLeft || hasRight;
+    const isVertical = hasUp || hasDown;
+
+    // If it's an intersection, return null (can't slide intersections)
+    if (isHorizontal && isVertical) return null;
+
+    if (isHorizontal) {
+      // Extend left
+      for (let c = col - 1; c >= 0 && this.wallMatrix[row][c]; c--) {
+        segment.push({ row, col: c });
+      }
+      // Extend right
+      for (let c = col + 1; c < GRID_COLS && this.wallMatrix[row][c]; c++) {
+        segment.push({ row, col: c });
+      }
+    } else if (isVertical) {
+      // Extend up
+      for (let r = row - 1; r >= 0 && this.wallMatrix[r][col]; r--) {
+        segment.push({ row: r, col });
+      }
+      // Extend down
+      for (let r = row + 1; r < GRID_ROWS && this.wallMatrix[r][col]; r++) {
+        segment.push({ row: r, col });
+      }
+    }
+
+    return segment;
+  }
+
+  private canSlideWall(segment: { row: number; col: number }[], dr: number, dc: number): boolean {
+    // Check if all new positions are valid and don't touch other walls
+    for (const pos of segment) {
+      const newRow = pos.row + dr;
+      const newCol = pos.col + dc;
+
+      // Check bounds
+      if (newRow < 0 || newRow >= GRID_ROWS || newCol < 0 || newCol >= GRID_COLS) {
+        return false;
+      }
+
+      // Check if new position touches any wall (excluding current segment)
+      const neighbors = [
+        { r: newRow - 1, c: newCol },
+        { r: newRow + 1, c: newCol },
+        { r: newRow, c: newCol - 1 },
+        { r: newRow, c: newCol + 1 },
+      ];
+
+      for (const n of neighbors) {
+        if (n.r >= 0 && n.r < GRID_ROWS && n.c >= 0 && n.c < GRID_COLS) {
+          if (this.wallMatrix[n.r][n.c]) {
+            // Check if this neighbor is part of the current segment
+            const isPartOfSegment = segment.some(s => s.row === n.r && s.col === n.c);
+            if (!isPartOfSegment) {
+              return false;
+            }
+          }
+        }
+      }
+    }
+    return true;
+  }
+
+  private slideWall(segment: { row: number; col: number }[], dr: number, dc: number): void {
+    // Remove old positions
+    for (const pos of segment) {
+      this.wallMatrix[pos.row][pos.col] = false;
+    }
+    // Add new positions
+    for (const pos of segment) {
+      const newRow = pos.row + dr;
+      const newCol = pos.col + dc;
+      this.wallMatrix[newRow][newCol] = true;
     }
   }
 
@@ -711,6 +846,33 @@ export class MazeScene implements Scene {
   }
 
   update(ctx: CanvasRenderingContext2D, _deltaTime: number): void {
+    // Fill entire canvas with black to conceal everything outside viewport
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+    // Draw tiled grass at 30% opacity on top of black (decorative)
+    if (this.grassImg) {
+      ctx.globalAlpha = 0.3;
+      const grassW = this.grassImg.width;
+      const grassH = this.grassImg.height;
+      for (let y = 0; y < ctx.canvas.height; y += grassH) {
+        for (let x = 0; x < ctx.canvas.width; x += grassW) {
+          ctx.drawImage(this.grassImg, x, y);
+        }
+      }
+      ctx.globalAlpha = 1.0;
+    }
+
+    // Apply transform for scaled game rendering
+    ctx.save();
+    ctx.translate(this.offsetX, this.offsetY);
+    ctx.scale(this.scale, this.scale);
+
+    // Clip to viewport - nothing draws outside this region
+    ctx.beginPath();
+    ctx.rect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+    ctx.clip();
+
     // Show title screen before game starts
     if (!this.gameStarted) {
       ctx.clearRect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
@@ -718,10 +880,14 @@ export class MazeScene implements Scene {
         // Draw title image scaled to fit viewport
         ctx.drawImage(this.titleImg, 0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
       }
+      ctx.restore();
       return;
     }
 
-    if (!this.mapCanvas) return;
+    if (!this.mapCanvas) {
+      ctx.restore();
+      return;
+    }
 
     // Update player animation
     const now = performance.now();
@@ -962,6 +1128,8 @@ export class MazeScene implements Scene {
       ctx.font = "24px sans-serif";
       ctx.fillText("Tap to Continue", VIEWPORT_WIDTH / 2, VIEWPORT_HEIGHT / 2 + 30);
     }
+
+    ctx.restore();
   }
 
   private collidesWithWall(x: number, y: number): boolean {

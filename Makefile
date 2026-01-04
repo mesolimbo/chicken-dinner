@@ -5,7 +5,7 @@ VERSION := $(shell node -p "require('./package.json').version")
 
 # Show help
 help:
-	@echo "Foxes v$(VERSION)"
+	@echo "Chicken Dinner v$(VERSION)"
 	@echo ""
 	@echo "Usage: make [target]"
 	@echo ""
@@ -13,7 +13,7 @@ help:
 	@echo "  init    Install dependencies"
 	@echo "  build   Build the project"
 	@echo "  serve   Run dev server with hot reload"
-	@echo "  dist    Build zip for itch.io (foxes-$(VERSION)-itch.zip)"
+	@echo "  dist    Build zip for itch.io + docs/ for GitHub Pages"
 	@echo "  clean   Remove build artifacts"
 	@echo "  help    Show this help message"
 
@@ -29,17 +29,24 @@ build:
 serve:
 	bun run server.ts
 
-# Build distribution zip for itch.io
+# Build distribution zip for itch.io and docs for GitHub Pages
 dist: build
 	@mkdir -p dist-itch
 	@cp public/index.html dist-itch/
 	@cp dist/main.js dist-itch/
 	@cp -r assets dist-itch/
 	@sed -i 's|/src/main.ts|main.js|g' dist-itch/index.html
-	@cd dist-itch && zip -r ../foxes-$(VERSION)-itch.zip .
+	@cd dist-itch && zip -r ../chicken-dinner-$(VERSION)-itch.zip .
 	@rm -rf dist-itch
-	@echo "Created foxes-$(VERSION)-itch.zip"
+	@echo "Created chicken-dinner-$(VERSION)-itch.zip"
+	@rm -rf docs
+	@mkdir -p docs
+	@cp public/index.html docs/
+	@cp dist/main.js docs/
+	@cp -r assets docs/
+	@sed -i 's|/src/main.ts|main.js|g' docs/index.html
+	@echo "Created docs/ for GitHub Pages"
 
 # Clean build artifacts
 clean:
-	rm -rf dist dist-itch foxes-*-itch.zip
+	rm -rf dist dist-itch chicken-dinner-*-itch.zip
