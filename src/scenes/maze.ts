@@ -35,6 +35,13 @@ const NPC_SIZE = 120;
 const HITBOX_SIZE = 80;
 const HITBOX_OFFSET = (TILE_SIZE - HITBOX_SIZE) / 2; // 20px offset
 
+// NPC AI speeds (pixels per frame)
+const CHICK_SPEED_WANDER = 2;
+const CHICK_SPEED_FLEE = 5;
+const DOG_SPEED_WANDER = 3;
+const DOG_SPEED_CHASE = 5;
+const DOG_CHASE_RANGE = 300; // pixels - dog only chases if within this distance
+
 interface Player {
   x: number;
   y: number;
@@ -51,6 +58,12 @@ interface NPC {
   img: ImageBitmap;
   type: "dog" | "chick";
   dead: boolean;
+  // AI state
+  wanderTarget: { x: number; y: number };
+  nextWanderTime: number;
+  stuckTime: number;
+  prevX: number;
+  prevY: number;
 }
 
 export class MazeScene implements Scene {
@@ -68,8 +81,11 @@ export class MazeScene implements Scene {
   private keys: Set<string> = new Set();
   private player: Player = { x: 0, y: 0, width: 0, height: 0, frame: 0 };
   private npcs: NPC[] = [];
+  private gameOver = false;
+  private canvas: HTMLCanvasElement | null = null;
 
   async create(ctx: CanvasRenderingContext2D): Promise<void> {
+    this.canvas = ctx.canvas;
     await this.loadAssets();
     this.generateMaze();
     this.initPlayer();
@@ -85,6 +101,24 @@ export class MazeScene implements Scene {
     window.addEventListener("keyup", (e) => {
       this.keys.delete(e.key);
     });
+
+    // Click/tap to restart when game over
+    const handleRestart = () => {
+      if (this.gameOver) {
+        this.restartGame();
+      }
+    };
+    this.canvas?.addEventListener("click", handleRestart);
+    this.canvas?.addEventListener("touchstart", handleRestart);
+  }
+
+  private restartGame(): void {
+    this.gameOver = false;
+    this.npcs = [];
+    this.generateMaze();
+    this.initPlayer();
+    this.initNPCs();
+    this.renderMapToBuffer();
   }
 
   private async loadImage(src: string): Promise<ImageBitmap> {
@@ -134,52 +168,65 @@ export class MazeScene implements Scene {
   }
 
   private initNPCs(): void {
-    const npcData: { img: ImageBitmap | null; type: "dog" | "chick" }[] = [
-      { img: this.dogImg, type: "dog" },
-      { img: this.chickImg, type: "chick" },
-    ];
-
-    for (const { img, type } of npcData) {
-      if (!img) continue;
-
-      // Find a random grass tile not occupied by player or other NPCs
-      for (let attempt = 0; attempt < 50; attempt++) {
-        const tileCol = Math.floor(Math.random() * GRID_COLS);
-        const tileRow = Math.floor(Math.random() * GRID_ROWS);
-
-        // Skip if out of bounds or is a wall
-        if (tileRow < 0 || tileRow >= GRID_ROWS || tileCol < 0 || tileCol >= GRID_COLS) continue;
-        if (this.wallMatrix[tileRow][tileCol]) continue;
-
-        const x = tileCol * TILE_SIZE;
-        const y = tileRow * TILE_SIZE;
-
-        // Skip if hitbox overlaps with player hitbox
-        if (this.hitboxesOverlap(x, y, this.player.x, this.player.y)) {
-          continue;
-        }
-
-        // Skip if overlaps with existing NPCs
-        let overlapsNPC = false;
-        for (const npc of this.npcs) {
-          if (this.hitboxesOverlap(x, y, npc.x, npc.y)) {
-            overlapsNPC = true;
-            break;
-          }
-        }
-        if (overlapsNPC) continue;
-
-        // Place NPC
-        this.npcs.push({ x, y, width: NPC_SIZE, height: NPC_SIZE, img, type, dead: false });
-        break;
-      }
+    // Spawn 1 dog
+    if (this.dogImg) {
+      this.spawnNPC(this.dogImg, "dog");
     }
 
-    // Sort NPCs so dog renders before chick (dog at bottom)
-    this.npcs.sort((a, b) => {
-      const order = { dog: 0, chick: 1 };
-      return order[a.type] - order[b.type];
-    });
+    // Spawn 2-3 chicks
+    if (this.chickImg) {
+      const chickCount = 2 + Math.floor(Math.random() * 2);
+      for (let i = 0; i < chickCount; i++) {
+        this.spawnNPC(this.chickImg, "chick");
+      }
+    }
+  }
+
+  private spawnNPC(img: ImageBitmap, type: "dog" | "chick"): void {
+    // Find a random grass tile not occupied by player or other NPCs
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const tileCol = Math.floor(Math.random() * GRID_COLS);
+      const tileRow = Math.floor(Math.random() * GRID_ROWS);
+
+      // Skip if out of bounds or is a wall
+      if (tileRow < 0 || tileRow >= GRID_ROWS || tileCol < 0 || tileCol >= GRID_COLS) continue;
+      if (this.wallMatrix[tileRow][tileCol]) continue;
+
+      const x = tileCol * TILE_SIZE;
+      const y = tileRow * TILE_SIZE;
+
+      // Skip if hitbox overlaps with player hitbox
+      if (this.hitboxesOverlap(x, y, this.player.x, this.player.y)) {
+        continue;
+      }
+
+      // Skip if overlaps with existing NPCs
+      let overlapsNPC = false;
+      for (const npc of this.npcs) {
+        if (this.hitboxesOverlap(x, y, npc.x, npc.y)) {
+          overlapsNPC = true;
+          break;
+        }
+      }
+      if (overlapsNPC) continue;
+
+      // Place NPC with AI state
+      this.npcs.push({
+        x,
+        y,
+        width: NPC_SIZE,
+        height: NPC_SIZE,
+        img,
+        type,
+        dead: false,
+        wanderTarget: { x, y },
+        nextWanderTime: 0,
+        stuckTime: 0,
+        prevX: x,
+        prevY: y,
+      });
+      break;
+    }
   }
 
   private hitboxesOverlap(x1: number, y1: number, x2: number, y2: number): boolean {
@@ -383,37 +430,46 @@ export class MazeScene implements Scene {
   update(ctx: CanvasRenderingContext2D, _deltaTime: number): void {
     if (!this.mapCanvas) return;
 
-    // Handle player movement
-    let newX = this.player.x;
-    let newY = this.player.y;
+    // Only update game logic if not game over
+    if (!this.gameOver) {
+      // Handle player movement
+      let newX = this.player.x;
+      let newY = this.player.y;
 
-    if (this.keys.has("ArrowLeft")) {
-      newX -= PLAYER_SPEED;
-    }
-    if (this.keys.has("ArrowRight")) {
-      newX += PLAYER_SPEED;
-    }
-    if (this.keys.has("ArrowUp")) {
-      newY -= PLAYER_SPEED;
-    }
-    if (this.keys.has("ArrowDown")) {
-      newY += PLAYER_SPEED;
-    }
+      if (this.keys.has("ArrowLeft")) {
+        newX -= PLAYER_SPEED;
+      }
+      if (this.keys.has("ArrowRight")) {
+        newX += PLAYER_SPEED;
+      }
+      if (this.keys.has("ArrowUp")) {
+        newY -= PLAYER_SPEED;
+      }
+      if (this.keys.has("ArrowDown")) {
+        newY += PLAYER_SPEED;
+      }
 
-    // Check collision and update position
-    if (!this.collidesWithWall(newX, this.player.y)) {
-      this.player.x = newX;
-    }
-    if (!this.collidesWithWall(this.player.x, newY)) {
-      this.player.y = newY;
-    }
+      // Check collision and update position
+      if (!this.collidesWithWall(newX, this.player.y)) {
+        this.player.x = newX;
+      }
+      if (!this.collidesWithWall(this.player.x, newY)) {
+        this.player.y = newY;
+      }
 
-    // Clamp player to map bounds
-    this.player.x = Math.max(0, Math.min(this.player.x, MAP_WIDTH - this.player.width));
-    this.player.y = Math.max(0, Math.min(this.player.y, MAP_HEIGHT - this.player.height));
+      // Clamp player to map bounds
+      this.player.x = Math.max(0, Math.min(this.player.x, MAP_WIDTH - this.player.width));
+      this.player.y = Math.max(0, Math.min(this.player.y, MAP_HEIGHT - this.player.height));
 
-    // Check if player caught a chick
-    this.checkChickCollisions();
+      // Update NPC AI
+      this.updateNPCs(performance.now());
+
+      // Check if player caught a chick
+      this.checkChickCollisions();
+
+      // Check if dog caught the player
+      this.checkDogCollision();
+    }
 
     // Camera follows player (centered)
     this.cameraX = this.player.x + this.player.width / 2 - VIEWPORT_WIDTH / 2;
@@ -464,6 +520,25 @@ export class MazeScene implements Scene {
       const screenX = sprite.x - this.cameraX;
       const screenY = sprite.y - this.cameraY;
       ctx.drawImage(sprite.img, screenX, screenY, TILE_SIZE, TILE_SIZE);
+    }
+
+    // Draw game over UI
+    if (this.gameOver) {
+      // Semi-transparent overlay
+      ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+      ctx.fillRect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+
+      // Game Over text
+      ctx.fillStyle = "#ff5555";
+      ctx.font = "bold 48px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("Game Over", VIEWPORT_WIDTH / 2, VIEWPORT_HEIGHT / 2 - 30);
+
+      // Tap to Retry text
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "24px sans-serif";
+      ctx.fillText("Tap to Retry", VIEWPORT_WIDTH / 2, VIEWPORT_HEIGHT / 2 + 30);
     }
   }
 
@@ -516,5 +591,196 @@ export class MazeScene implements Scene {
         }
       }
     }
+  }
+
+  private checkDogCollision(): void {
+    for (const npc of this.npcs) {
+      if (npc.type === "dog" && !npc.dead) {
+        if (this.hitboxesOverlap(this.player.x, this.player.y, npc.x, npc.y)) {
+          this.gameOver = true;
+          return;
+        }
+      }
+    }
+  }
+
+  private updateNPCs(currentTime: number): void {
+    for (const npc of this.npcs) {
+      if (npc.dead) continue;
+
+      const hasLOS = this.hasLineOfSight(npc.x, npc.y, this.player.x, this.player.y);
+      const dx = this.player.x - npc.x;
+      const dy = this.player.y - npc.y;
+      const distanceToPlayer = Math.sqrt(dx * dx + dy * dy);
+
+      if (npc.type === "chick") {
+        if (hasLOS) {
+          // Flee from player
+          this.moveNpcAway(npc, this.player.x, this.player.y, CHICK_SPEED_FLEE);
+        } else {
+          // Wander
+          this.wanderNpc(npc, currentTime, CHICK_SPEED_WANDER);
+        }
+      } else if (npc.type === "dog") {
+        if (hasLOS && distanceToPlayer < DOG_CHASE_RANGE) {
+          // Chase player
+          this.moveNpcToward(npc, this.player.x, this.player.y, DOG_SPEED_CHASE);
+        } else {
+          // Wander
+          this.wanderNpc(npc, currentTime, DOG_SPEED_WANDER);
+        }
+      }
+
+      // Clamp to map bounds
+      npc.x = Math.max(0, Math.min(npc.x, MAP_WIDTH - npc.width));
+      npc.y = Math.max(0, Math.min(npc.y, MAP_HEIGHT - npc.height));
+
+      // Check if stuck
+      const movedDist = Math.abs(npc.x - npc.prevX) + Math.abs(npc.y - npc.prevY);
+      if (movedDist < 0.5) {
+        npc.stuckTime++;
+      } else {
+        npc.stuckTime = 0;
+      }
+      npc.prevX = npc.x;
+      npc.prevY = npc.y;
+    }
+  }
+
+  private wanderNpc(npc: NPC, currentTime: number, speed: number): void {
+    // Check if need to pick new wander target
+    const dx = npc.wanderTarget.x - npc.x;
+    const dy = npc.wanderTarget.y - npc.y;
+    const distToTarget = Math.sqrt(dx * dx + dy * dy);
+    const reachedTarget = distToTarget < 20;
+
+    if (reachedTarget || currentTime > npc.nextWanderTime || npc.stuckTime > 30) {
+      this.pickRandomWanderTarget(npc);
+      npc.nextWanderTime = currentTime + 1000 + Math.random() * 1000;
+      npc.stuckTime = 0;
+    }
+
+    // Move toward wander target
+    this.moveNpcToward(npc, npc.wanderTarget.x, npc.wanderTarget.y, speed);
+  }
+
+  private pickRandomWanderTarget(npc: NPC): void {
+    // Try to find a grass tile
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const tileCol = Math.floor(Math.random() * GRID_COLS);
+      const tileRow = Math.floor(Math.random() * GRID_ROWS);
+
+      if (tileRow >= 0 && tileRow < GRID_ROWS && tileCol >= 0 && tileCol < GRID_COLS) {
+        if (!this.wallMatrix[tileRow][tileCol]) {
+          npc.wanderTarget.x = tileCol * TILE_SIZE;
+          npc.wanderTarget.y = tileRow * TILE_SIZE;
+          return;
+        }
+      }
+    }
+  }
+
+  private moveNpcToward(npc: NPC, targetX: number, targetY: number, speed: number): void {
+    const dx = targetX - npc.x;
+    const dy = targetY - npc.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    if (distance < 1) return;
+
+    const vx = (dx / distance) * speed;
+    const vy = (dy / distance) * speed;
+
+    // Try to move, check collisions
+    const newX = npc.x + vx;
+    const newY = npc.y + vy;
+
+    if (!this.npcCollidesWithWall(npc, newX, npc.y)) {
+      npc.x = newX;
+    }
+    if (!this.npcCollidesWithWall(npc, npc.x, newY)) {
+      npc.y = newY;
+    }
+  }
+
+  private moveNpcAway(npc: NPC, targetX: number, targetY: number, speed: number): void {
+    const dx = npc.x - targetX;
+    const dy = npc.y - targetY;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    if (distance < 1) return;
+
+    let vx = (dx / distance) * speed;
+    let vy = (dy / distance) * speed;
+
+    // Edge-safe fleeing: don't push further out if near bounds
+    const pad = 20;
+    if (npc.x <= pad && vx < 0) vx = 0;
+    if (npc.x >= MAP_WIDTH - npc.width - pad && vx > 0) vx = 0;
+    if (npc.y <= pad && vy < 0) vy = 0;
+    if (npc.y >= MAP_HEIGHT - npc.height - pad && vy > 0) vy = 0;
+
+    const newX = npc.x + vx;
+    const newY = npc.y + vy;
+
+    if (!this.npcCollidesWithWall(npc, newX, npc.y)) {
+      npc.x = newX;
+    }
+    if (!this.npcCollidesWithWall(npc, npc.x, newY)) {
+      npc.y = newY;
+    }
+  }
+
+  private npcCollidesWithWall(npc: NPC, x: number, y: number): boolean {
+    // NPC hitbox (80x80 centered)
+    const hx = x + HITBOX_OFFSET;
+    const hy = y + HITBOX_OFFSET;
+
+    // Check collision with bush tiles
+    const startCol = Math.floor(hx / TILE_SIZE);
+    const endCol = Math.floor((hx + HITBOX_SIZE - 1) / TILE_SIZE);
+    const startRow = Math.floor(hy / TILE_SIZE);
+    const endRow = Math.floor((hy + HITBOX_SIZE - 1) / TILE_SIZE);
+
+    for (let row = startRow; row <= endRow; row++) {
+      for (let col = startCol; col <= endCol; col++) {
+        if (this.wallMatrix[row]?.[col]) {
+          // Bush hitbox (80x80 centered in tile)
+          const bhx = col * TILE_SIZE + HITBOX_OFFSET;
+          const bhy = row * TILE_SIZE + HITBOX_OFFSET;
+
+          if (hx < bhx + HITBOX_SIZE && hx + HITBOX_SIZE > bhx &&
+              hy < bhy + HITBOX_SIZE && hy + HITBOX_SIZE > bhy) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
+  private hasLineOfSight(x1: number, y1: number, x2: number, y2: number): boolean {
+    // Check from center of sprite to center of sprite
+    const cx1 = x1 + TILE_SIZE / 2;
+    const cy1 = y1 + TILE_SIZE / 2;
+    const cx2 = x2 + TILE_SIZE / 2;
+    const cy2 = y2 + TILE_SIZE / 2;
+
+    const dx = cx2 - cx1;
+    const dy = cy2 - cy1;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    const steps = Math.max(1, Math.floor(distance / 20)); // check every ~20px
+
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const x = cx1 + dx * t;
+      const y = cy1 + dy * t;
+      const col = Math.floor(x / TILE_SIZE);
+      const row = Math.floor(y / TILE_SIZE);
+      if (this.wallMatrix[row]?.[col]) {
+        return false;
+      }
+    }
+    return true;
   }
 }
