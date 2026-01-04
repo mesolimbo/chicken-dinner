@@ -399,29 +399,13 @@ export class MazeScene implements Scene {
     this.mapCanvas = new OffscreenCanvas(MAP_WIDTH, MAP_HEIGHT);
     this.mapCtx = this.mapCanvas.getContext("2d")!;
 
-    // Draw grass background
+    // Draw grass background only (bushes rendered dynamically for z-sorting)
     if (this.grassImg) {
       const grassW = this.grassImg.width;
       const grassH = this.grassImg.height;
       for (let y = 0; y < MAP_HEIGHT; y += grassH) {
         for (let x = 0; x < MAP_WIDTH; x += grassW) {
           this.mapCtx.drawImage(this.grassImg, x, y);
-        }
-      }
-    }
-
-    // Draw bush tiles based on wall matrix
-    if (this.bushesImg) {
-      for (let row = 0; row < GRID_ROWS; row++) {
-        for (let col = 0; col < GRID_COLS; col++) {
-          if (this.wallMatrix[row][col]) {
-            const tileIndex = this.getTileIndex(row, col);
-            this.mapCtx.drawImage(
-              this.bushesImg,
-              tileIndex * TILE_SIZE, 0, TILE_SIZE, TILE_SIZE,
-              col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE
-            );
-          }
         }
       }
     }
@@ -490,26 +474,42 @@ export class MazeScene implements Scene {
     // Ensure proper alpha blending for sprites
     ctx.globalCompositeOperation = 'source-over';
 
-    // Draw dead NPCs (bones) right above background
-    for (const npc of this.npcs) {
-      if (!npc.dead) continue;
-      const screenX = npc.x - this.cameraX;
-      const screenY = npc.y - this.cameraY;
-      ctx.drawImage(npc.img, screenX, screenY, TILE_SIZE, TILE_SIZE);
+    // Collect all sprites for y-sorted rendering (bushes, bones, player, NPCs)
+    const sprites: { type: 'bush' | 'bone' | 'sprite'; img: ImageBitmap; x: number; y: number; tileIndex?: number }[] = [];
+
+    // Add bushes
+    if (this.bushesImg) {
+      for (let row = 0; row < GRID_ROWS; row++) {
+        for (let col = 0; col < GRID_COLS; col++) {
+          if (this.wallMatrix[row][col]) {
+            const tileIndex = this.getTileIndex(row, col);
+            sprites.push({
+              type: 'bush',
+              img: this.bushesImg,
+              x: col * TILE_SIZE,
+              y: row * TILE_SIZE,
+              tileIndex,
+            });
+          }
+        }
+      }
     }
 
-    // Collect all live sprites for y-sorted rendering
-    const sprites: { img: ImageBitmap; x: number; y: number }[] = [];
+    // Add dead NPCs (bones)
+    for (const npc of this.npcs) {
+      if (!npc.dead) continue;
+      sprites.push({ type: 'bone', img: npc.img, x: npc.x, y: npc.y });
+    }
 
     // Add player
     if (this.foxImg) {
-      sprites.push({ img: this.foxImg, x: this.player.x, y: this.player.y });
+      sprites.push({ type: 'sprite', img: this.foxImg, x: this.player.x, y: this.player.y });
     }
 
     // Add live NPCs
     for (const npc of this.npcs) {
       if (npc.dead) continue;
-      sprites.push({ img: npc.img, x: npc.x, y: npc.y });
+      sprites.push({ type: 'sprite', img: npc.img, x: npc.x, y: npc.y });
     }
 
     // Sort by y position (lower y = further back, drawn first)
@@ -519,7 +519,15 @@ export class MazeScene implements Scene {
     for (const sprite of sprites) {
       const screenX = sprite.x - this.cameraX;
       const screenY = sprite.y - this.cameraY;
-      ctx.drawImage(sprite.img, screenX, screenY, TILE_SIZE, TILE_SIZE);
+      if (sprite.type === 'bush' && sprite.tileIndex !== undefined) {
+        ctx.drawImage(
+          sprite.img,
+          sprite.tileIndex * TILE_SIZE, 0, TILE_SIZE, TILE_SIZE,
+          screenX, screenY, TILE_SIZE, TILE_SIZE
+        );
+      } else {
+        ctx.drawImage(sprite.img, screenX, screenY, TILE_SIZE, TILE_SIZE);
+      }
     }
 
     // Draw game over UI
