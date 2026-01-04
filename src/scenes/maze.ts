@@ -90,6 +90,7 @@ export class MazeScene implements Scene {
   private mapCanvas: OffscreenCanvas | null = null;
   private mapCtx: OffscreenCanvasRenderingContext2D | null = null;
   private wallMatrix: boolean[][] = []; // true = wall, false = grass
+  private intersectionTiles: Set<string> = new Set(); // Protected tiles from box fix removal
   private cameraX = 0;
   private cameraY = 0;
   private keys: Set<string> = new Set();
@@ -554,12 +555,17 @@ export class MazeScene implements Scene {
       { dr: 0, dc: 1 },  // right
     ];
 
-    // First, try to shrink a wall longer than MIN_WALL_LENGTH
+    // Helper to check if a tile is part of the protected intersection cross
+    const isIntersectionTile = (row: number, col: number): boolean => {
+      return this.intersectionTiles.has(`${row},${col}`);
+    };
+
+    // First, try to shrink a wall longer than MIN_WALL_LENGTH (skip intersection tiles)
     for (const { dr, dc } of directions) {
       const wallRow = targetRow + dr;
       const wallCol = targetCol + dc;
       if (wallRow >= 0 && wallRow < GRID_ROWS && wallCol >= 0 && wallCol < GRID_COLS) {
-        if (this.wallMatrix[wallRow][wallCol]) {
+        if (this.wallMatrix[wallRow][wallCol] && !isIntersectionTile(wallRow, wallCol)) {
           const wallLength = this.getWallSegmentLength(wallRow, wallCol);
           if (wallLength > MIN_WALL_LENGTH) {
             this.wallMatrix[wallRow][wallCol] = false;
@@ -569,12 +575,12 @@ export class MazeScene implements Scene {
       }
     }
 
-    // If all walls are length 2, try to slide one away from the enclosed area
+    // If all walls are length 2, try to slide one away from the enclosed area (skip intersection)
     for (const { dr, dc } of directions) {
       const wallRow = targetRow + dr;
       const wallCol = targetCol + dc;
       if (wallRow >= 0 && wallRow < GRID_ROWS && wallCol >= 0 && wallCol < GRID_COLS) {
-        if (this.wallMatrix[wallRow][wallCol]) {
+        if (this.wallMatrix[wallRow][wallCol] && !isIntersectionTile(wallRow, wallCol)) {
           const segment = this.getWallSegment(wallRow, wallCol);
           if (segment && this.canSlideWall(segment, dr, dc)) {
             this.slideWall(segment, dr, dc);
@@ -584,12 +590,12 @@ export class MazeScene implements Scene {
       }
     }
 
-    // If no wall can be moved, delete a wall and place a new one elsewhere
+    // If no wall can be moved, delete a wall and place a new one elsewhere (skip intersection)
     for (const { dr, dc } of directions) {
       const wallRow = targetRow + dr;
       const wallCol = targetCol + dc;
       if (wallRow >= 0 && wallRow < GRID_ROWS && wallCol >= 0 && wallCol < GRID_COLS) {
-        if (this.wallMatrix[wallRow][wallCol]) {
+        if (this.wallMatrix[wallRow][wallCol] && !isIntersectionTile(wallRow, wallCol)) {
           const segment = this.getWallSegment(wallRow, wallCol);
           if (segment) {
             // Remove this wall
@@ -721,25 +727,36 @@ export class MazeScene implements Scene {
   }
 
   private placeIntersectingPair(): void {
-    // Ensure walls are at least 3 tiles so intersection has arms on both sides
-    const hLength = 3;
-    const vLength = 3;
+    // Clear previous intersection tiles
+    this.intersectionTiles.clear();
 
     // Place intersection towards left side to leave room for detached walls
     const hRow = 2;
-    const hStartCol = 2;
+    const intersectCol = 3;
 
-    // Place horizontal wall
-    for (let c = hStartCol; c < hStartCol + hLength; c++) {
+    // Base arm lengths (tiles from center, not including center)
+    const armLengths = {
+      left: 1,
+      right: 1,
+      up: 1,
+      down: 1,
+    };
+
+    // Extend one random arm to length 2 (making it 3 tiles total including center connection)
+    const arms = ["left", "right", "up", "down"] as const;
+    const extendedArm = arms[Math.floor(Math.random() * arms.length)];
+    armLengths[extendedArm] = 2;
+
+    // Place horizontal wall (left arm + center + right arm)
+    for (let c = intersectCol - armLengths.left; c <= intersectCol + armLengths.right; c++) {
       this.wallMatrix[hRow][c] = true;
+      this.intersectionTiles.add(`${hRow},${c}`);
     }
 
-    // Intersection in middle of horizontal wall
-    const intersectCol = hStartCol + 1;
-
-    // Place vertical wall centered on intersection
-    for (let r = 1; r <= 3; r++) {
+    // Place vertical wall (up arm + center already placed + down arm)
+    for (let r = hRow - armLengths.up; r <= hRow + armLengths.down; r++) {
       this.wallMatrix[r][intersectCol] = true;
+      this.intersectionTiles.add(`${r},${intersectCol}`);
     }
   }
 
