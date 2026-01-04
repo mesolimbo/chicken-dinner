@@ -203,8 +203,8 @@ export class MazeScene implements Scene {
   }
 
   private getSpeedMultiplier(): number {
-    // Increase speed by 5% per level (compounds)
-    return Math.pow(1.05, this.level - 1);
+    // Smooth exponential increase - 10% faster each level
+    return Math.pow(1.1, this.level - 1);
   }
 
   private async loadImage(src: string): Promise<ImageBitmap> {
