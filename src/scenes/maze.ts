@@ -229,6 +229,7 @@ export class MazeScene implements Scene {
 
     // Touch events
     this.canvas?.addEventListener("touchstart", (e) => {
+      e.preventDefault(); // Prevent mousedown from also firing
       if (!this.loadingScreenDismissed && this.loadingComplete) {
         // Dismiss loading screen and start intro music
         this.loadingScreenDismissed = true;
@@ -247,7 +248,6 @@ export class MazeScene implements Scene {
         this.nextLevel();
         return;
       }
-      e.preventDefault();
       const touch = e.touches[0];
       this.isMouseDown = true;
       this.mouseTarget = getWorldPos(touch.clientX, touch.clientY);
@@ -926,8 +926,20 @@ export class MazeScene implements Scene {
 
     // Show loading screen until dismissed
     if (!this.loadingScreenDismissed) {
-      ctx.fillStyle = "#1a1a1a";
-      ctx.fillRect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+      // Draw 100% opacity grass inside viewport
+      if (this.grassImg) {
+        const grassW = this.grassImg.width;
+        const grassH = this.grassImg.height;
+        for (let y = 0; y < VIEWPORT_HEIGHT; y += grassH) {
+          for (let x = 0; x < VIEWPORT_WIDTH; x += grassW) {
+            ctx.drawImage(this.grassImg, x, y);
+          }
+        }
+      } else {
+        // Fallback before grass loads
+        ctx.fillStyle = "#1a1a1a";
+        ctx.fillRect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+      }
 
       // Progress bar dimensions
       const barWidth = 300;
