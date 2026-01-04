@@ -23,19 +23,35 @@ const MAX_WALL_LENGTH = 5;
 const NUM_DETACHED_WALLS = 6; // Free-standing walls (in addition to the intersecting pair)
 const MAX_PLACEMENT_ATTEMPTS = 200; // Max iterations to place all walls
 
+// Player sprite config (120x120 per frame, extensible for animation)
+const PLAYER_FRAME_SIZE = 120;
+const PLAYER_FRAMES = 1;
+const PLAYER_SPEED = 8;
+
+interface Player {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  frame: number;
+}
+
 export class MazeScene implements Scene {
   private grassImg: HTMLImageElement | null = null;
   private bushesImg: HTMLImageElement | null = null;
+  private foxImg: HTMLImageElement | null = null;
   private mapCanvas: OffscreenCanvas | null = null;
   private mapCtx: OffscreenCanvasRenderingContext2D | null = null;
   private wallMatrix: boolean[][] = []; // true = wall, false = grass
   private cameraX = 0;
   private cameraY = 0;
   private keys: Set<string> = new Set();
+  private player: Player = { x: 0, y: 0, width: 0, height: 0, frame: 0 };
 
   async create(ctx: CanvasRenderingContext2D): Promise<void> {
     await this.loadAssets();
     this.generateMaze();
+    this.initPlayer();
     this.renderMapToBuffer();
     this.setupInput();
   }
@@ -59,10 +75,39 @@ export class MazeScene implements Scene {
   }
 
   private async loadAssets(): Promise<void> {
-    [this.grassImg, this.bushesImg] = await Promise.all([
+    [this.grassImg, this.bushesImg, this.foxImg] = await Promise.all([
       this.loadImage("/assets/plain_grass.png"),
       this.loadImage("/assets/bushes.png"),
+      this.loadImage("/assets/test-fox.png"),
     ]);
+  }
+
+  private initPlayer(): void {
+    if (!this.foxImg) return;
+
+    // Player size (120x120 per frame)
+    this.player.width = PLAYER_FRAME_SIZE;
+    this.player.height = PLAYER_FRAME_SIZE;
+
+    // Find a random grass tile in the initial viewport
+    const viewTilesX = Math.floor(VIEWPORT_WIDTH / TILE_SIZE);
+    const viewTilesY = Math.floor(VIEWPORT_HEIGHT / TILE_SIZE);
+
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const tileCol = Math.floor(Math.random() * viewTilesX);
+      const tileRow = Math.floor(Math.random() * viewTilesY);
+
+      if (!this.wallMatrix[tileRow]?.[tileCol]) {
+        // Place player centered in this tile
+        this.player.x = tileCol * TILE_SIZE + (TILE_SIZE - this.player.width) / 2;
+        this.player.y = tileRow * TILE_SIZE + (TILE_SIZE - this.player.height) / 2;
+        return;
+      }
+    }
+
+    // Fallback: place at tile 1,1 if no grass found
+    this.player.x = TILE_SIZE + (TILE_SIZE - this.player.width) / 2;
+    this.player.y = TILE_SIZE + (TILE_SIZE - this.player.height) / 2;
   }
 
   private generateMaze(): void {
@@ -250,30 +295,82 @@ export class MazeScene implements Scene {
   update(ctx: CanvasRenderingContext2D, _deltaTime: number): void {
     if (!this.mapCanvas) return;
 
-    // Handle camera movement
-    const SCROLL_SPEED = 15;
+    // Handle player movement
+    let newX = this.player.x;
+    let newY = this.player.y;
+
     if (this.keys.has("ArrowLeft")) {
-      this.cameraX -= SCROLL_SPEED;
+      newX -= PLAYER_SPEED;
     }
     if (this.keys.has("ArrowRight")) {
-      this.cameraX += SCROLL_SPEED;
+      newX += PLAYER_SPEED;
     }
     if (this.keys.has("ArrowUp")) {
-      this.cameraY -= SCROLL_SPEED;
+      newY -= PLAYER_SPEED;
     }
     if (this.keys.has("ArrowDown")) {
-      this.cameraY += SCROLL_SPEED;
+      newY += PLAYER_SPEED;
     }
+
+    // Check collision and update position
+    if (!this.collidesWithWall(newX, this.player.y)) {
+      this.player.x = newX;
+    }
+    if (!this.collidesWithWall(this.player.x, newY)) {
+      this.player.y = newY;
+    }
+
+    // Clamp player to map bounds
+    this.player.x = Math.max(0, Math.min(this.player.x, MAP_WIDTH - this.player.width));
+    this.player.y = Math.max(0, Math.min(this.player.y, MAP_HEIGHT - this.player.height));
+
+    // Camera follows player (centered)
+    this.cameraX = this.player.x + this.player.width / 2 - VIEWPORT_WIDTH / 2;
+    this.cameraY = this.player.y + this.player.height / 2 - VIEWPORT_HEIGHT / 2;
 
     // Clamp camera to map bounds
     this.cameraX = Math.max(0, Math.min(this.cameraX, MAP_WIDTH - VIEWPORT_WIDTH));
     this.cameraY = Math.max(0, Math.min(this.cameraY, MAP_HEIGHT - VIEWPORT_HEIGHT));
 
+    // Draw map
     ctx.clearRect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
     ctx.drawImage(
       this.mapCanvas,
       this.cameraX, this.cameraY, VIEWPORT_WIDTH, VIEWPORT_HEIGHT,
       0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT
     );
+
+    // Draw player
+    if (this.foxImg) {
+      const screenX = this.player.x - this.cameraX;
+      const screenY = this.player.y - this.cameraY;
+      const frameWidth = this.foxImg.width / PLAYER_FRAMES;
+      const frameX = this.player.frame * frameWidth;
+
+      ctx.drawImage(
+        this.foxImg,
+        frameX, 0, frameWidth, this.foxImg.height,
+        screenX, screenY, this.player.width, this.player.height
+      );
+    }
+  }
+
+  private collidesWithWall(x: number, y: number): boolean {
+    // Check all four corners of player
+    const corners = [
+      { x: x, y: y },
+      { x: x + this.player.width - 1, y: y },
+      { x: x, y: y + this.player.height - 1 },
+      { x: x + this.player.width - 1, y: y + this.player.height - 1 },
+    ];
+
+    for (const corner of corners) {
+      const col = Math.floor(corner.x / TILE_SIZE);
+      const row = Math.floor(corner.y / TILE_SIZE);
+      if (this.wallMatrix[row]?.[col]) {
+        return true;
+      }
+    }
+    return false;
   }
 }
