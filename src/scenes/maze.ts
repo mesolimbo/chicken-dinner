@@ -138,17 +138,22 @@ export class MazeScene implements Scene {
   }
 
   private loadHighScore(): void {
-    const match = document.cookie.match(/foxHighScore=(\d+)/);
-    if (match) {
-      this.highScore = parseInt(match[1], 10);
+    try {
+      const stored = localStorage.getItem("foxHighScore");
+      if (stored) {
+        this.highScore = parseInt(stored, 10);
+      }
+    } catch {
+      // localStorage may be unavailable in some contexts
     }
   }
 
   private saveHighScore(): void {
-    // Cookie expires in 1 year
-    const expires = new Date();
-    expires.setFullYear(expires.getFullYear() + 1);
-    document.cookie = `foxHighScore=${this.highScore};expires=${expires.toUTCString()};path=/`;
+    try {
+      localStorage.setItem("foxHighScore", String(this.highScore));
+    } catch {
+      // localStorage may be unavailable in some contexts
+    }
   }
 
   private setupInput(): void {
