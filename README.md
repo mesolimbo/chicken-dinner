@@ -1,6 +1,6 @@
 # Chicken Dinner
 
-A fast-paced arcade game where you play as a hungry fox trying to catch chicks while avoiding the guard dog!
+A fast-paced arcade game where you play as a hungry fox trying to catch chickens while avoiding the guard dog!
 
 Play it [here](https://mesolimbo.github.io/chicken-dinner/) or on [itch.io](http://tinymicrobe.itch.io/chicken-dinner).
 
